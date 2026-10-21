@@ -372,6 +372,49 @@ def _largest_component(mesh, *, prefer_watertight=False):
     return max(parts, key=score)
 
 
+def smooth_mesh(mesh, *, iterations=2, alpha=0.15):
+    """Smooth a watertight mesh to reduce visible stepping and produce cleaner print files."""
+    mesh = _safe_scene_to_mesh(mesh)
+    mesh = validate_mesh(mesh, context="Mesh to smooth")
+    try:
+        smooth = getattr(trimesh, "smoothing", None)
+        lap = getattr(smooth, "filter_laplacian", None) if smooth is not None else None
+        if lap is not None:
+            smoothed = lap(mesh, iterations=max(1, int(iterations)), alpha=float(alpha))
+            return validate_mesh(smoothed, context="Smoothed mesh")
+    except Exception:
+        pass
+
+    result = mesh.copy()
+    for _ in range(max(1, int(iterations))):
+        vertices = result.vertices.copy()
+        faces = result.faces
+        neighbors = np.zeros_like(vertices)
+        counts = np.zeros(len(vertices), dtype=float)
+
+        for face in faces:
+            a, b, c = face
+            for i, j in ((a, b), (b, c), (c, a)):
+                neighbors[i] += vertices[j]
+                neighbors[j] += vertices[i]
+                counts[i] += 1.0
+                counts[j] += 1.0
+
+        counts[counts == 0] = 1.0
+        smoothed = vertices + alpha * (neighbors / counts[:, None] - vertices)
+        result.vertices = smoothed
+        try:
+            result.remove_unreferenced_vertices()
+        except Exception:
+            pass
+        try:
+            result.fix_normals()
+        except Exception:
+            pass
+
+    return validate_mesh(result, context="Smoothed mesh")
+
+
 def repair_mesh(mesh):
     """Repair a mesh by removing bad elements and keeping the largest valid volume."""
     mesh = _safe_scene_to_mesh(mesh)
@@ -432,9 +475,13 @@ def scale_mesh(mesh, factor):
     return validate_mesh(scaled, context="Scaled mesh")
 
 
-def make_printable(mesh, *, size=None):
-    """Repair a mesh, optionally resize it, and place it on the bed in Bambu Studio-friendly coordinates."""
+def make_printable(mesh, *, size=None, smooth=True):
+    """Repair a mesh, smooth away rough stepped surfaces, optionally resize it,
+and place it on the bed in Bambu Studio-friendly coordinates."""
     repaired = repair_mesh(mesh)
+
+    if smooth:
+        repaired = smooth_mesh(repaired, iterations=2, alpha=0.2)
 
     if size is not None:
         try:
@@ -558,7 +605,7 @@ def cmd_hollow(args):
 
 def cmd_make_printable(args):
     mesh = load_mesh(args.model)
-    printable = make_printable(mesh, size=args.size)
+    printable = make_printable(mesh, size=args.size, smooth=getattr(args, 'smooth', True))
     out = Path(args.out) if args.out else Path(args.model).with_name(Path(args.model).stem + "_printable.stl")
     save_mesh(printable, out)
     rep = mesh_report(printable)
@@ -611,10 +658,11 @@ def main():
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_hollow)
 
-    p = sub.add_parser("make-printable", help="repair + scale + Bambu Studio bed placement -> STL")
+    p = sub.add_parser("make-printable", help="repair + smooth + scale + Bambu Studio bed placement -> STL")
     p.add_argument("model")
     p.add_argument("--size", type=float, default=None)
     p.add_argument("--out", default=None)
+    p.add_argument("--no-smooth", action="store_true", help="skip the smoothing pass for the final printable model")
     p.set_defaults(func=cmd_make_printable)
 
     p = sub.add_parser("convert", help="re-export as clean binary STL")
@@ -628,5 +676,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
