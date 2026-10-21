@@ -5,10 +5,10 @@ One tool, the whole chain:
 
   CAPTURE      photo-capture checklist for best scans
   RECONSTRUCT  photos -> 3D mesh
-                 engine auto-detect (best available wins):
-                   1. COLMAP      (pro, if installed)
-                   2. Meshroom    (pro, if installed)
-                   3. BUILT-IN    experimental SfM engine (OpenCV, beta quality)
+                engine auto-detect (best available wins):
+                  1. COLMAP      (pro, if installed)
+                  2. Meshroom    (pro, if installed)
+                  3. BUILT-IN    experimental SfM engine (OpenCV, beta quality)
   REPAIR       de-sliver, dedupe, fix normals, fill holes, remove noise blobs
   SCALE        set true size in millimeters
   PREP         place on the bed and export a slicer-friendly STL
@@ -295,10 +295,9 @@ def _safe_scene_to_mesh(scene_or_mesh):
 
 def validate_mesh(mesh, *, context="Mesh"):
     """Reject empty or degenerate mesh inputs early with a useful message."""
+    mesh = _safe_scene_to_mesh(mesh)
     if mesh is None:
         raise ValueError(f"{context} is empty.")
-    if isinstance(mesh, trimesh.Scene):
-        mesh = _safe_scene_to_mesh(mesh)
     if not hasattr(mesh, "vertices") or len(getattr(mesh, "vertices", [])) == 0:
         raise ValueError(f"{context} has no vertices.")
     if not hasattr(mesh, "faces") or len(getattr(mesh, "faces", [])) == 0:
@@ -372,52 +371,8 @@ def _largest_component(mesh, *, prefer_watertight=False):
     return max(parts, key=score)
 
 
-def smooth_mesh(mesh, *, iterations=2, alpha=0.1):
-    """Light smoothing to reduce visible stepping while retaining the shape."""
-    mesh = _safe_scene_to_mesh(mesh)
-    mesh = validate_mesh(mesh, context="Mesh to smooth")
-
-    try:
-        smooth_module = getattr(trimesh, "smoothing", None)
-        laplacian = getattr(smooth_module, "filter_laplacian", None) if smooth_module else None
-        if laplacian is not None:
-            smoothed = laplacian(mesh, iterations=max(1, int(iterations)), alpha=float(alpha))
-            return validate_mesh(smoothed, context="Smoothed mesh")
-    except Exception:
-        pass
-
-    result = mesh.copy()
-    for _ in range(max(1, int(iterations))):
-        vertices = result.vertices.copy()
-        neighbors = np.zeros_like(vertices)
-        counts = np.zeros(len(vertices), dtype=float)
-
-        for face in result.faces:
-            a, b, c = face
-            pairs = ((a, b), (b, c), (c, a))
-            for i, j in pairs:
-                neighbors[i] += vertices[j]
-                neighbors[j] += vertices[i]
-                counts[i] += 1.0
-                counts[j] += 1.0
-
-        counts[counts == 0] = 1.0
-        smoothed = vertices + alpha * (neighbors / counts[:, None] - vertices)
-        result.vertices = smoothed
-        try:
-            result.remove_unreferenced_vertices()
-        except Exception:
-            pass
-        try:
-            result.fix_normals()
-        except Exception:
-            pass
-    return validate_mesh(result, context="Smoothed mesh")
-
-
 def repair_mesh(mesh):
     """Repair a mesh by removing bad elements and keeping the largest valid volume."""
-    mesh = _safe_scene_to_mesh(mesh)
     mesh = validate_mesh(mesh, context="Mesh to repair")
     repaired = mesh.copy()
 
@@ -462,12 +417,7 @@ def repair_mesh(mesh):
 
 def scale_mesh(mesh, factor):
     """Scale a mesh uniformly around its centroid and keep the output valid."""
-    mesh = _safe_scene_to_mesh(mesh)
     mesh = validate_mesh(mesh, context="Mesh to scale")
-    try:
-        factor = float(factor)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"Scale factor must be a number, got {factor!r}") from exc
     if factor <= 0:
         raise ValueError(f"Scale factor must be positive, got {factor!r}")
     scaled = mesh.copy()
@@ -475,18 +425,12 @@ def scale_mesh(mesh, factor):
     return validate_mesh(scaled, context="Scaled mesh")
 
 
-def make_printable(mesh, *, size=None, smooth=True):
-    """Repair a mesh, optionally reduce surface noise, resize it, and place it on the bed."""
+def upgrade_mesh(mesh, *, size=None):
+    """Repair, optionally scale, and place a mesh flat on the bed."""
     repaired = repair_mesh(mesh)
 
-    if smooth:
-        repaired = smooth_mesh(repaired, iterations=2, alpha=0.1)
-
     if size is not None:
-        try:
-            size = float(size)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"size must be a positive number, got {size!r}") from exc
+        size = float(size)
         if size <= 0:
             raise ValueError(f"size must be positive, got {size!r}")
         max_extent = float(max(repaired.extents))
@@ -495,26 +439,21 @@ def make_printable(mesh, *, size=None, smooth=True):
         repaired = scale_mesh(repaired, size / max_extent)
 
     bounds = repaired.bounds
-    if not np.isfinite(bounds).all():
-        raise ValueError("Mesh bounds are invalid; cannot place it on the print bed.")
+    min_x, min_y, min_z = bounds[0]
+    repaired.apply_translation([-min_x, -min_y, -min_z])
 
-    min_xyz = bounds.min(axis=0)
-    repaired.apply_translation(-min_xyz)
-
-    z_min = float(repaired.bounds[0][2])
-    if z_min < 0.0:
-        repaired.apply_translation([0.0, 0.0, -z_min])
+    bounds = repaired.bounds
+    if np.isfinite(bounds).all():
+        z_floor = float(bounds[0][2])
+        if z_floor < 0.0:
+            repaired.apply_translation([0.0, 0.0, -z_floor])
 
     return validate_mesh(repaired, context="Print-ready mesh")
 
 
-def upgrade_mesh_file(source, *, output=None, size=None, smooth=True):
-    """Load, repair, smooth, place, and export a single mesh file for printing."""
-    in_mesh = load_mesh(source)
-    printable = make_printable(in_mesh, size=size, smooth=smooth)
-    dst = Path(output) if output else Path(source).with_suffix(".stl")
-    save_mesh(printable, dst)
-    return dst
+def make_printable(mesh, *, size=None):
+    """Repair a mesh, optionally resize it, and place it on the bed in Bambu Studio-friendly coordinates."""
+    return upgrade_mesh(mesh, size=size)
 
 
 def find_lowest_points(mesh, count=2):
@@ -613,7 +552,7 @@ def cmd_hollow(args):
 
 def cmd_make_printable(args):
     mesh = load_mesh(args.model)
-    printable = make_printable(mesh, size=args.size, smooth=not getattr(args, "no_smooth", False))
+    printable = upgrade_mesh(mesh, size=args.size)
     out = Path(args.out) if args.out else Path(args.model).with_name(Path(args.model).stem + "_printable.stl")
     save_mesh(printable, out)
     rep = mesh_report(printable)
@@ -621,11 +560,6 @@ def cmd_make_printable(args):
     verdict = "BAMBU STUDIO READY" if rep["watertight"] else "SLICE WITH CAUTION (not watertight)"
     print(f" Verdict: {verdict}")
     print(f" Saved -> {out}")
-
-
-def cmd_upgrade(args):
-    out = upgrade_mesh_file(args.model, output=args.out, size=args.size, smooth=not args.no_smooth)
-    print(f"Upgraded mesh file -> {out}")
 
 
 def cmd_convert(args):
@@ -671,19 +605,17 @@ def main():
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_hollow)
 
-    p = sub.add_parser("make-printable", help="repair + smooth + scale + Bambu Studio bed placement -> STL")
+    p = sub.add_parser("make-printable", help="repair + scale + Bambu Studio bed placement -> STL")
     p.add_argument("model")
     p.add_argument("--size", type=float, default=None)
     p.add_argument("--out", default=None)
-    p.add_argument("--no-smooth", action="store_true")
     p.set_defaults(func=cmd_make_printable)
 
-    p = sub.add_parser("upgrade", help="single-file mesh upgrade: repair + smooth + center + export STL")
+    p = sub.add_parser("upgrade", help="alias for make-printable")
     p.add_argument("model")
     p.add_argument("--size", type=float, default=None)
     p.add_argument("--out", default=None)
-    p.add_argument("--no-smooth", action="store_true")
-    p.set_defaults(func=cmd_upgrade)
+    p.set_defaults(func=cmd_make_printable)
 
     p = sub.add_parser("convert", help="re-export as clean binary STL")
     p.add_argument("model")
