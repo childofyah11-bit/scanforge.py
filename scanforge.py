@@ -5,10 +5,10 @@ One tool, the whole chain:
 
   CAPTURE      photo-capture checklist for best scans
   RECONSTRUCT  photos -> 3D mesh
-                engine auto-detect (best available wins):
-                  1. COLMAP      (pro, if installed)
-                  2. Meshroom    (pro, if installed)
-                  3. BUILT-IN    experimental SfM engine (OpenCV, beta quality)
+                 engine auto-detect (best available wins):
+                   1. COLMAP      (pro, if installed)
+                   2. Meshroom    (pro, if installed)
+                   3. BUILT-IN    experimental SfM engine (OpenCV, beta quality)
   REPAIR       de-sliver, dedupe, fix normals, fill holes, remove noise blobs
   SCALE        set true size in millimeters
   PREP         place on the bed and export a slicer-friendly STL
@@ -297,6 +297,8 @@ def validate_mesh(mesh, *, context="Mesh"):
     """Reject empty or degenerate mesh inputs early with a useful message."""
     if mesh is None:
         raise ValueError(f"{context} is empty.")
+    if isinstance(mesh, trimesh.Scene):
+        mesh = _safe_scene_to_mesh(mesh)
     if not hasattr(mesh, "vertices") or len(getattr(mesh, "vertices", [])) == 0:
         raise ValueError(f"{context} has no vertices.")
     if not hasattr(mesh, "faces") or len(getattr(mesh, "faces", [])) == 0:
@@ -372,6 +374,7 @@ def _largest_component(mesh, *, prefer_watertight=False):
 
 def repair_mesh(mesh):
     """Repair a mesh by removing bad elements and keeping the largest valid volume."""
+    mesh = _safe_scene_to_mesh(mesh)
     mesh = validate_mesh(mesh, context="Mesh to repair")
     repaired = mesh.copy()
 
@@ -416,7 +419,12 @@ def repair_mesh(mesh):
 
 def scale_mesh(mesh, factor):
     """Scale a mesh uniformly around its centroid and keep the output valid."""
+    mesh = _safe_scene_to_mesh(mesh)
     mesh = validate_mesh(mesh, context="Mesh to scale")
+    try:
+        factor = float(factor)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Scale factor must be a number, got {factor!r}") from exc
     if factor <= 0:
         raise ValueError(f"Scale factor must be positive, got {factor!r}")
     scaled = mesh.copy()
@@ -429,7 +437,10 @@ def make_printable(mesh, *, size=None):
     repaired = repair_mesh(mesh)
 
     if size is not None:
-        size = float(size)
+        try:
+            size = float(size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"size must be a positive number, got {size!r}") from exc
         if size <= 0:
             raise ValueError(f"size must be positive, got {size!r}")
         max_extent = float(max(repaired.extents))
@@ -438,12 +449,15 @@ def make_printable(mesh, *, size=None):
         repaired = scale_mesh(repaired, size / max_extent)
 
     bounds = repaired.bounds
-    min_x, min_y, min_z = bounds[0]
-    repaired.apply_translation([-min_x, -min_y, -min_z])
+    if not np.isfinite(bounds).all():
+        raise ValueError("Mesh bounds are invalid; cannot place it on the print bed.")
 
-    bounds = repaired.bounds
-    if np.isfinite(bounds).all():
-        repaired.apply_translation([0.0, 0.0, -min(0.0, float(bounds[0][2]))])
+    min_xyz = bounds.min(axis=0)
+    repaired.apply_translation(-min_xyz)
+
+    z_min = float(repaired.bounds[0][2])
+    if z_min < 0.0:
+        repaired.apply_translation([0.0, 0.0, -z_min])
 
     return validate_mesh(repaired, context="Print-ready mesh")
 
@@ -453,7 +467,7 @@ def find_lowest_points(mesh, count=2):
     if count <= 0:
         return []
     order = np.argsort(mesh.vertices[:, 2])
-    return [int(idx) for idx in order[: max(1, min(count, len(order)))]]
+    return [int(idx) for idx in order[: max(1, min(count, len(order)))] ]
 
 
 def cmd_check(args):
