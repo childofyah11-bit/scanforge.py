@@ -372,15 +372,16 @@ def _largest_component(mesh, *, prefer_watertight=False):
     return max(parts, key=score)
 
 
-def smooth_mesh(mesh, *, iterations=2, alpha=0.15):
-    """Smooth a watertight mesh to reduce visible stepping and produce cleaner print files."""
+def smooth_mesh(mesh, *, iterations=2, alpha=0.1):
+    """Light smoothing to reduce visible stepping while retaining the shape."""
     mesh = _safe_scene_to_mesh(mesh)
     mesh = validate_mesh(mesh, context="Mesh to smooth")
+
     try:
-        smooth = getattr(trimesh, "smoothing", None)
-        lap = getattr(smooth, "filter_laplacian", None) if smooth is not None else None
-        if lap is not None:
-            smoothed = lap(mesh, iterations=max(1, int(iterations)), alpha=float(alpha))
+        smooth_module = getattr(trimesh, "smoothing", None)
+        laplacian = getattr(smooth_module, "filter_laplacian", None) if smooth_module else None
+        if laplacian is not None:
+            smoothed = laplacian(mesh, iterations=max(1, int(iterations)), alpha=float(alpha))
             return validate_mesh(smoothed, context="Smoothed mesh")
     except Exception:
         pass
@@ -388,13 +389,13 @@ def smooth_mesh(mesh, *, iterations=2, alpha=0.15):
     result = mesh.copy()
     for _ in range(max(1, int(iterations))):
         vertices = result.vertices.copy()
-        faces = result.faces
         neighbors = np.zeros_like(vertices)
         counts = np.zeros(len(vertices), dtype=float)
 
-        for face in faces:
+        for face in result.faces:
             a, b, c = face
-            for i, j in ((a, b), (b, c), (c, a)):
+            pairs = ((a, b), (b, c), (c, a))
+            for i, j in pairs:
                 neighbors[i] += vertices[j]
                 neighbors[j] += vertices[i]
                 counts[i] += 1.0
@@ -411,7 +412,6 @@ def smooth_mesh(mesh, *, iterations=2, alpha=0.15):
             result.fix_normals()
         except Exception:
             pass
-
     return validate_mesh(result, context="Smoothed mesh")
 
 
@@ -476,12 +476,11 @@ def scale_mesh(mesh, factor):
 
 
 def make_printable(mesh, *, size=None, smooth=True):
-    """Repair a mesh, smooth away rough stepped surfaces, optionally resize it,
-and place it on the bed in Bambu Studio-friendly coordinates."""
+    """Repair a mesh, optionally reduce surface noise, resize it, and place it on the bed."""
     repaired = repair_mesh(mesh)
 
     if smooth:
-        repaired = smooth_mesh(repaired, iterations=2, alpha=0.2)
+        repaired = smooth_mesh(repaired, iterations=2, alpha=0.1)
 
     if size is not None:
         try:
@@ -507,6 +506,15 @@ and place it on the bed in Bambu Studio-friendly coordinates."""
         repaired.apply_translation([0.0, 0.0, -z_min])
 
     return validate_mesh(repaired, context="Print-ready mesh")
+
+
+def upgrade_mesh_file(source, *, output=None, size=None, smooth=True):
+    """Load, repair, smooth, place, and export a single mesh file for printing."""
+    in_mesh = load_mesh(source)
+    printable = make_printable(in_mesh, size=size, smooth=smooth)
+    dst = Path(output) if output else Path(source).with_suffix(".stl")
+    save_mesh(printable, dst)
+    return dst
 
 
 def find_lowest_points(mesh, count=2):
@@ -605,7 +613,7 @@ def cmd_hollow(args):
 
 def cmd_make_printable(args):
     mesh = load_mesh(args.model)
-    printable = make_printable(mesh, size=args.size, smooth=getattr(args, 'smooth', True))
+    printable = make_printable(mesh, size=args.size, smooth=not getattr(args, "no_smooth", False))
     out = Path(args.out) if args.out else Path(args.model).with_name(Path(args.model).stem + "_printable.stl")
     save_mesh(printable, out)
     rep = mesh_report(printable)
@@ -613,6 +621,11 @@ def cmd_make_printable(args):
     verdict = "BAMBU STUDIO READY" if rep["watertight"] else "SLICE WITH CAUTION (not watertight)"
     print(f" Verdict: {verdict}")
     print(f" Saved -> {out}")
+
+
+def cmd_upgrade(args):
+    out = upgrade_mesh_file(args.model, output=args.out, size=args.size, smooth=not args.no_smooth)
+    print(f"Upgraded mesh file -> {out}")
 
 
 def cmd_convert(args):
@@ -662,8 +675,15 @@ def main():
     p.add_argument("model")
     p.add_argument("--size", type=float, default=None)
     p.add_argument("--out", default=None)
-    p.add_argument("--no-smooth", action="store_true", help="skip the smoothing pass for the final printable model")
+    p.add_argument("--no-smooth", action="store_true")
     p.set_defaults(func=cmd_make_printable)
+
+    p = sub.add_parser("upgrade", help="single-file mesh upgrade: repair + smooth + center + export STL")
+    p.add_argument("model")
+    p.add_argument("--size", type=float, default=None)
+    p.add_argument("--out", default=None)
+    p.add_argument("--no-smooth", action="store_true")
+    p.set_defaults(func=cmd_upgrade)
 
     p = sub.add_parser("convert", help="re-export as clean binary STL")
     p.add_argument("model")
