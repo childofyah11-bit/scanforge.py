@@ -1,0 +1,213 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #07111d;
+  --panel: rgba(10, 18, 29, 0.86);
+  --panel-border: rgba(182, 214, 255, 0.18);
+  --soft: #dfeaff;
+  --muted: #91a9c8;
+  --accent: #68d0ff;
+  --accent-2: #9ef3a5;
+  --warning: #ffb454;
+  --shadow: rgba(0, 0, 0, 0.32);
+}
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  font-family: Inter, "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(104, 208, 255, 0.12), transparent 25%),
+    radial-gradient(circle at bottom right, rgba(158, 243, 165, 0.1), transparent 30%),
+    var(--bg);
+  color: var(--soft);
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 18px;
+}
+
+.app-shell {
+  width: min(1400px, 100%);
+  min-height: 840px;
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr);
+  background: rgba(8, 13, 22, 0.75);
+  border: 1px solid var(--panel-border);
+  border-radius: 22px;
+  box-shadow: 0 24px 60px var(--shadow);
+  overflow: hidden;
+}
+
+.panel {
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+}
+
+.controls-panel {
+  padding: 22px 18px;
+  border-right: 1px solid var(--panel-border);
+}
+
+.brand-block {
+  margin-bottom: 20px;
+}
+
+.eyebrow {
+  display: inline-block;
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.brand-block h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 2vw, 2.2rem);
+  line-height: 1.15;
+}
+
+.file-picker,
+.control-group {
+  display: block;
+  margin-bottom: 18px;
+}
+
+.file-picker span,
+.control-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
+
+.file-picker input {
+  width: 100%;
+  padding: 12px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: rgba(17, 27, 38, 0.8);
+  color: var(--soft);
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.button-row.compact {
+  margin-bottom: 0;
+}
+
+button {
+  appearance: none;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, var(--accent), #77c6ff);
+  color: #08131e;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+button.secondary {
+  background: rgba(110, 130, 156, 0.25);
+  color: var(--soft);
+  border: 1px solid rgba(174, 201, 255, 0.16);
+}
+
+.inline-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+input[type="number"] {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--panel-border);
+  background: rgba(17, 27, 38, 0.8);
+  color: var(--soft);
+}
+
+.metrics {
+  margin-top: 22px;
+  padding-top: 15px;
+  border-top: 1px solid var(--panel-border);
+  display: grid;
+  gap: 12px;
+}
+
+.metrics > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(14, 22, 32, 0.7);
+  border: 1px solid rgba(174, 201, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.metric-label {
+  color: var(--muted);
+}
+
+.viewer-panel {
+  position: relative;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+#viewer {
+  flex: 1;
+  width: 100%;
+  min-height: 720px;
+  background:
+    linear-gradient(180deg, rgba(7, 17, 29, 0.15), rgba(4, 7, 12, 0.7)),
+    radial-gradient(circle at center, rgba(70, 119, 167, 0.18), rgba(8, 13, 22, 0.08));
+}
+
+.status-bar {
+  padding: 10px 16px;
+  border-top: 1px solid var(--panel-border);
+  background: rgba(8, 13, 22, 0.86);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 900px) {
+  body {
+    padding: 10px;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .controls-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--panel-border);
+  }
+
+  #viewer {
+    min-height: 480px;
+  }
+}
